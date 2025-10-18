@@ -26,6 +26,9 @@ import pascal.taie.analysis.dataflow.analysis.DataflowAnalysis;
 import pascal.taie.analysis.dataflow.fact.DataflowResult;
 import pascal.taie.analysis.graph.cfg.CFG;
 
+import java.util.ArrayDeque;
+import java.util.HashSet;
+
 class IterativeSolver<Node, Fact> extends Solver<Node, Fact> {
 
     public IterativeSolver(DataflowAnalysis<Node, Fact> analysis) {
@@ -40,5 +43,45 @@ class IterativeSolver<Node, Fact> extends Solver<Node, Fact> {
     @Override
     protected void doSolveBackward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {
         // TODO - finish me
+        boolean changed;
+        do {
+            changed = false;
+            var exitPoint = cfg.getExit();
+            var visited = new HashSet<Node>();
+            visited.add(exitPoint);
+            var worklist = new ArrayDeque<Node>(cfg.getPredsOf(exitPoint));
+            while(!worklist.isEmpty()){
+                var node = worklist.removeFirst();
+                visited.add(node);
+
+                cfg.getSuccsOf(node).forEach(succ -> {
+                    var outFact = result.getOutFact(node);
+                    if (outFact == null) {
+                        outFact = analysis.newInitialFact();
+                        result.setOutFact(node, outFact);
+                    }
+                    analysis.meetInto(result.getInFact(succ), outFact);
+                });
+                changed |= analysis.transferNode(node, result.getInFact(node), result.getOutFact(node));
+
+                cfg.getPredsOf(node).forEach(pred -> {
+                    if (!visited.contains(pred)) {
+                        worklist.add(pred);
+                    }
+                });
+            }
+
+//            for (var node : cfg.getNodes()) {
+//                    cfg.getSuccsOf(node).forEach(succ -> {
+//                        var outFact = result.getOutFact(node);
+//                        if (outFact == null) {
+//                            outFact = analysis.newInitialFact();
+//                            result.setOutFact(node, outFact);
+//                        }
+//                        analysis.meetInto(result.getInFact(succ), outFact);
+//                    });
+//                    changed |= analysis.transferNode(node, result.getInFact(node), result.getOutFact(node));
+//            }
+        } while (changed);
     }
 }
