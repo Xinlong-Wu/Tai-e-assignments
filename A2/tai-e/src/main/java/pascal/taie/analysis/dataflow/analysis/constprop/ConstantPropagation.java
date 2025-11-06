@@ -35,6 +35,8 @@ import pascal.taie.util.AnalysisException;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Optional;
 
 public class ConstantPropagation extends
         AbstractDataflowAnalysis<Stmt, CPFact> {
@@ -55,7 +57,8 @@ public class ConstantPropagation extends
         // TODO - finish me
         var fact = new CPFact();
         for (var param: cfg.getIR().getParams()) {
-            fact.update(param, Value.getNAC());
+            if (canHoldInt(param))
+                fact.update(param, Value.getNAC());
         }
         return fact;
     }
@@ -106,39 +109,36 @@ public class ConstantPropagation extends
     @Override
     public boolean transferNode(Stmt stmt, CPFact in, CPFact out) {
         // TODO - finish me
-        var newOut = in.copy();
-
-        stmt.getDef().ifPresent(def -> {
-            if (def instanceof Var _var) {
-                newOut.remove((Var) _var);
-            }
-        });
+        if (stmt.getDef().isEmpty()) {
+            return out.copyFrom(in);
+        }
 
         if (stmt instanceof DefinitionStmt defStmt) {
-            if (defStmt.getLValue() instanceof Var lVar) {
-                var rValue = defStmt.getRValue();
-                if (rValue instanceof IntLiteral literal) {
-                    newOut.update(lVar, Value.makeConstant(literal.getValue()));
-                }
-                else if (rValue instanceof Var rVar) {
-                    if (canHoldInt(rVar)) {
-                        newOut.update(lVar, in.get(rVar));
-                    }
-                }
-                else if (rValue instanceof BinaryExp binExpr) {
-                    var res = evaluate(binExpr, in);
-                    if (res != null) {
-                        newOut.update(lVar, res);
-                    }
-                }
-                else if (rValue instanceof InvokeExp) {
-                    if (canHoldInt(lVar)){
+            if (defStmt.getDef().isPresent() &&
+                    defStmt.getLValue() instanceof Var lVar) {
+                if (canHoldInt(lVar)) {
+                    RValue rValue = defStmt.getRValue();
+                    CPFact newOut = in.copy();
+                    if (rValue instanceof IntLiteral literal) {
+                        newOut.update(lVar, Value.makeConstant(literal.getValue()));
+                    } else if (rValue instanceof Var rVar) {
+                        if (canHoldInt(rVar)) {
+                            newOut.update(lVar, in.get(rVar));
+                        }
+                    } else if (rValue instanceof BinaryExp binExpr) {
+                        var res = evaluate(binExpr, in);
+
+                        if (res != null) {
+                            newOut.update(lVar, res);
+                        }
+                    } else {
                         newOut.update(lVar, Value.getNAC());
                     }
+                    return out.copyFrom(newOut);
                 }
             }
         }
-        return out.copyFrom(newOut);
+        return out.copyFrom(in);
     }
 
     /**
