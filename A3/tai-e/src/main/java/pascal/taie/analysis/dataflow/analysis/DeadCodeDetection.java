@@ -33,21 +33,14 @@ import pascal.taie.analysis.graph.cfg.CFGBuilder;
 import pascal.taie.analysis.graph.cfg.Edge;
 import pascal.taie.config.AnalysisConfig;
 import pascal.taie.ir.IR;
-import pascal.taie.ir.exp.ArithmeticExp;
-import pascal.taie.ir.exp.ArrayAccess;
-import pascal.taie.ir.exp.CastExp;
-import pascal.taie.ir.exp.FieldAccess;
-import pascal.taie.ir.exp.NewExp;
-import pascal.taie.ir.exp.RValue;
-import pascal.taie.ir.exp.Var;
+import pascal.taie.ir.exp.*;
 import pascal.taie.ir.stmt.AssignStmt;
 import pascal.taie.ir.stmt.If;
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.ir.stmt.SwitchStmt;
+import pascal.taie.util.collection.Pair;
 
-import java.util.Comparator;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
 public class DeadCodeDetection extends MethodAnalysis {
 
@@ -71,6 +64,96 @@ public class DeadCodeDetection extends MethodAnalysis {
         Set<Stmt> deadCode = new TreeSet<>(Comparator.comparing(Stmt::getIndex));
         // TODO - finish me
         // Your task is to recognize dead code in ir and add it to deadCode
+        deadCode.addAll(ir.getStmts());
+
+        ArrayList<Stmt> worklist = new ArrayList<>();
+        HashSet<Stmt> visited = new HashSet<>();
+        worklist.add(cfg.getEntry());
+        visited.add(cfg.getEntry());
+        while (!worklist.isEmpty()) {
+            var stmt = worklist.remove(0);
+            // control flow unreachable
+            deadCode.remove(stmt);
+
+            // if branch unreachable
+            if (stmt instanceof If ifStmt) {
+                var cond = ifStmt.getCondition();
+                var factSet = constants.getInFact(ifStmt);
+
+                var condRes = ConstantPropagation.evaluate(cond, factSet);
+                if (condRes.isConstant()) {
+                    var reachablePath = condRes.getConstant() == 0 ? Edge.Kind.IF_FALSE : Edge.Kind.IF_TRUE;
+                    cfg.getOutEdgesOf(stmt).stream().filter(stmtEdge -> stmtEdge.getKind() == reachablePath).findFirst().ifPresent( reachableNode -> {
+                        if (!visited.contains(reachableNode.getTarget())) {
+                            worklist.add(reachableNode.getTarget());
+                            visited.add(reachableNode.getTarget());
+                        }
+                    });
+                }
+                else {
+                    cfg.getSuccsOf(stmt).forEach(st -> {
+                        if (!visited.contains(st)) {
+                            worklist.add(st);
+                            visited.add(st);
+                        }
+                    });
+                }
+            }
+            // switch branch unreachable
+            else if (stmt instanceof SwitchStmt switchStmt) {
+                var condVar = switchStmt.getVar();
+                var factSet = constants.getInFact(switchStmt);
+                if (factSet.get(condVar).isConstant()) {
+                    var constVal = factSet.get(condVar).getConstant();
+                    var targetStmt = switchStmt.getCaseTargets().stream().filter(pair -> pair.first().equals(constVal)).findFirst().map(Pair::second).orElse(switchStmt.getDefaultTarget());
+
+                    if (!visited.contains(targetStmt)){
+                        worklist.add(targetStmt);
+                        visited.add(targetStmt);
+                    }
+                }
+                else {
+                    cfg.getSuccsOf(stmt).forEach(st -> {
+                        if (!visited.contains(st)) {
+                            worklist.add(st);
+                            visited.add(st);
+                        }
+                    });
+                }
+            }
+            // unused assignment
+            else if (stmt instanceof AssignStmt assignStmt) {
+                var def = assignStmt.getDef();
+                List<RValue> uses = (List<RValue>) assignStmt.getUses();
+                var outFact = liveVars.getOutFact(assignStmt);
+
+                // dead assignment if out not contains def
+                def.ifPresent(defVal -> {
+                    if (defVal instanceof Var defVar && uses.stream().allMatch(DeadCodeDetection::hasNoSideEffect)) {
+                        if (!outFact.contains(defVar)) {
+                            deadCode.add(assignStmt);
+                        }
+                    }
+                });
+
+                cfg.getSuccsOf(stmt).forEach(st -> {
+                    if (!visited.contains(st)) {
+                        worklist.add(st);
+                        visited.add(st);
+                    }
+                });
+            }
+            else {
+
+                cfg.getSuccsOf(stmt).forEach(st -> {
+                    if (!visited.contains(st)) {
+                        worklist.add(st);
+                        visited.add(st);
+                    }
+                });
+            }
+        }
+
         return deadCode;
     }
 
